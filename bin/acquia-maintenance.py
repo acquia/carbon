@@ -227,7 +227,7 @@ def _walkTree(tree, visitor, nodePath, useDC):
             _walkTree(tree, visitor, childPath, useDC=useDC)
     return
 
-def _tokenRangesForNodes(keyspace, serverList, targetNodes):
+def _tokenRangesForNodes(keyspace, serverList, targetNodes, credentials=None):
     """Get a list of the token ranges owned by the nodes in `targetNodes`.
 
     The list can be used to partition the maintenance process, e.g. run a 
@@ -239,7 +239,7 @@ def _tokenRangesForNodes(keyspace, serverList, targetNodes):
   
     sysManager = None
     for server in serverList:
-        sysManager = SystemManager(server)
+        sysManager = SystemManager(server, credentials=credentials)
         try:
             sysManager.describe_cluster_name()
         except (Exception) as e:
@@ -393,10 +393,16 @@ if __name__ == '__main__':
     if not (options.daemon or options.log):
         logfile = sys.stdout
 
+    # Read creds from db.conf so we can authenticate if necessary
+    credentials = None
+    cassandra_settings = settings.read_file('db.conf')['cassandra']
+    if cassandra_settings and 'PASSWORD' in cassandra_settings and 'USERNAME' in cassandra_settings:
+      credentials = {'username': cassandra_settings['USERNAME'], 'password': cassandra_settings['PASSWORD']}
+
     # pass the DC name so we can specify dcName=True when calling 
     # selfAndChildPaths later. 
     tree = carbon_cassandra_db.DataTree("/", options.keyspace, 
-        options.serverlist, localDCName=options.dc_name)
+        options.serverlist, localDCName=options.dc_name, credentials=credentials)
 
     # Begin walking the tree
     dispatcher('maintenance_start', tree)
@@ -406,7 +412,7 @@ if __name__ == '__main__':
         # work on a sub set of the data nodes whose nodePath is in the the 
         # token ranges owned by the cassandra nodes in rollup_targets
         for startToken, endToken, nodeIP in _tokenRangesForNodes(
-            options.keyspace, options.serverlist, options.rollup_targets):
+            options.keyspace, options.serverlist, options.rollup_targets, credentials):
       
             _walkRange(tree, visitor, 
                 True if options.dc_name else False, startToken, endToken)
