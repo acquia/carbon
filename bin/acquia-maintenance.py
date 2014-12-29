@@ -324,6 +324,10 @@ def opt_parser():
     parser.add_option('--rollup-targets', default=[], type='string',
         action='callback', callback=_split_csv, 
         help="Cassandra Node IPs to rollup metrics for.")
+    parser.add_option('--username', default='', type='string',
+        help="Username to use for authentication with Cassandra.")
+    parser.add_option('--password', default='', type='string',
+        help="Password to use for authentication with Cassandra.")
     return parser
 
 if __name__ == '__main__':
@@ -395,9 +399,12 @@ if __name__ == '__main__':
 
     # Read creds from db.conf so we can authenticate if necessary
     credentials = None
-    cassandra_settings = settings.read_file('db.conf')['cassandra']
-    if cassandra_settings and 'PASSWORD' in cassandra_settings and 'USERNAME' in cassandra_settings:
-      credentials = {'username': cassandra_settings['USERNAME'], 'password': cassandra_settings['PASSWORD']}
+    if options.username and options.password:
+      credentials = {'username': options.username, 'password': options.password}
+    else:
+      cassandra_settings = settings.read_file('db.conf')['cassandra']
+      if cassandra_settings and 'PASSWORD' in cassandra_settings and 'USERNAME' in cassandra_settings:
+        credentials = {'username': cassandra_settings['USERNAME'], 'password': cassandra_settings['PASSWORD']}
 
     # pass the DC name so we can specify dcName=True when calling 
     # selfAndChildPaths later. 
