@@ -294,7 +294,7 @@ class CarbonDaemonOptions(usage.Options):
     if not self["debug"]:
       if self.parent.get("syslog", None):
         log.logToSyslog(self.parent["prefix"])
-      elif not self.parent["nodaemon"]:
+      else:
         logdir = settings.LOG_DIR
         if not isdir(logdir):
           os.makedirs(logdir)
