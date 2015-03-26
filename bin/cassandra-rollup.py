@@ -31,6 +31,7 @@ def get_args():
   parser.add_argument('--configdir', default='/opt/graphite/conf/carbon-daemons/writer/', help='Path to the Carbon config directory')
   parser.add_argument('--log-level', default='info', help='Verbosity of logging (info or debug)')
   parser.add_argument('--interval', default=60, help='Interval to call the rollup process', type=int)
+  parser.add_argument('--log-file', default='/var/log/cassandra_rollup.log', help='Path to write the log to')
 
   # not used right now
   parser.add_argument('--dc-name', default=None, help='Name of the Cassandra Data Center to rollup nodes from')
@@ -43,11 +44,15 @@ def get_args():
   return args
 
 def setup(options):
+  filename = 'log'
+  if options.log_file:
+    filename = options.log_file
+
   if options.log_level == 'debug':
     level = logging.DEBUG
   else:
     level = logging.INFO
-  logging.basicConfig(filename='log', level=level)
+  logging.basicConfig(filename=filename, level=level)
 
 def signal_handler(signal, frame):
   scheduler.shutdown()
