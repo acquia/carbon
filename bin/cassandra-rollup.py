@@ -26,8 +26,7 @@ except ImportError:
 
 def get_args():
   parser = argparse.ArgumentParser()
-  parser.add_argument('--config-file', nargs=1,
-                      help='Path to a JSON configuration file with Zookeeper information.')
+  parser.add_argument('--config-file', help='Path to a JSON configuration file with Zookeeper information.')
   parser.add_argument('--log-level', default='info', help='Verbosity of logging (info or debug)')
   parser.add_argument('--interval', default=60, help='Interval to call the rollup process', type=int)
   parser.add_argument('--log-file', default='/var/log/cassandra_rollup.log', help='Path to write the log to')

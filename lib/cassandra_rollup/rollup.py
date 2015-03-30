@@ -36,13 +36,12 @@ class RollupHandler(object):
     return self._config
 
   def read_config(self):
-    self._config = Config(self._options).load_config
+    config = Config(self._options)
+    config.load_config()
+    self._config = config
 
   @property
   def zookeeper(self):
-    return self._zookeeper
-
-  def zk(self):
     if not self._zookeeper:
       self._zookeeper = Zookeeper(servers=self.config.zookeeper_servers, acl_password=self.config.zookeeper_acl)
     return self._zookeeper
