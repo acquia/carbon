@@ -34,11 +34,13 @@ class Config(object):
         self._cassandra_servers = config.get('cassandra_servers')
         self._cassandra_password = config.get('cassandra_password')
         self._cassandra_username = config.get('cassandra_username')
+        self._keyspace = config.get('keyspace')
     else:
       config = {x.lower(): os.getenv(x) for x in Config.ZOOKEEPER_ENV}
       self._zookeeper_acl = config['zookeeper_acl_password']
       self._zookeeper_servers = config['zookeeper_servers'].split(',')
       self._zookeeper_coordination = config['zookeeper_coordination'] == 'true'
+      self._keyspace = os.getenv('CASSANDRA_KEYSPACE')
 
       # Load Cassandra settings through the environment
       for env_key, option_key in Config.KEY_MAPPINGS.iteritems():
@@ -50,7 +52,6 @@ class Config(object):
             value = value.split(',')
           setattr(self, "_{0}".format(env_key.lower()), value)
 
-    self._keyspace = self._config.keyspace
 
   @property
   def zookeeper_coordination(self):
