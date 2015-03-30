@@ -1,5 +1,6 @@
 import logging
 import os
+import signal
 import socket
 import sys
 import threading
@@ -17,6 +18,16 @@ class RollupHandler(object):
     self._config = None
     self._zookeeper = None
     self._tree = None
+
+    # This ensures that we leave the party cleanly if the script is told to
+    # shut down
+    # It's defined as a closure so that we have access to the partitioner
+    def signal_handler(*args):
+      self.zookeeper.partitioner.release_set()
+
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGHUP, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
 
   @property
   def config(self):
@@ -181,3 +192,4 @@ class RollupHandler(object):
 
     assert len(tokenRanges) == len(assignments)
     return tokenRanges
+
