@@ -94,13 +94,17 @@ class RollupHandler(object):
 
     if partitioner.acquired:
       partition = [p for p in self.zookeeper.partitioner]
-
       visitor = NodePathVisitor(self.tree)
+      threads = []
       # work on a sub set of the data nodes whose nodePath is in the the
       # token ranges owned by the cassandra nodes in rollup_targets
       for startToken, endToken, nodeIP in self.tokenRangesForNodes(partition):
         t = threading.Thread(target=self.walkRange, args=(visitor, False, startToken, endToken))
+        threads.append(t)
         t.start()
+
+      for t in threads:
+        t.join()
 
   def walkRange(self, visitor, useDC, startToken, endToken):
     """Visit the data nodes in between `startToken` and `endToken` and call the
@@ -127,7 +131,7 @@ class RollupHandler(object):
         # we do not know what parent to tell the visitor.
         # well we could get it from the child, but I dont want to.
         visitor(None, childPath, isMetric)
-      lock.release()
+    lock.release()
     return
 
   def tokenRangesForNodes(self, targetNodes):
