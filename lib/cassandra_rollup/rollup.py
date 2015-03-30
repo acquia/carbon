@@ -13,7 +13,6 @@ from cassandra_rollup import Zookeeper, Config, NodePathVisitor
 class RollupHandler(object):
   def __init__(self, options):
     self._options = options
-    self._carbon_config_dir = options.configdir
     self._config_file = options.config_file
     self._config = None
     self._zookeeper = None
