@@ -1,28 +1,13 @@
 #!/usr/bin/env python
 import argparse
-import json
 import logging
-import os
 import signal
-import sys
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from carbon_cassandra_plugin import carbon_cassandra_db
 from cassandra_rollup import Zookeeper, Config, RollupHandler
 
-# Make carbon imports available for some functionality
-root_dir = os.environ['GRAPHITE_ROOT'] = os.environ.get('GRAPHITE_ROOT', '/opt/graphite/')
-lib_dir = os.path.join(root_dir, 'lib')
-sys.path.append(lib_dir)
 scheduler = None
-
-try:
-  import carbon
-  from carbon.conf import settings, load_storage_rules
-except ImportError:
-  print ("Failed to import carbon, specify your installation location "
-         "with the GRAPHITE_ROOT environment variable.")
-  sys.exit(1)
 
 def get_args():
   parser = argparse.ArgumentParser()
@@ -68,7 +53,5 @@ def main(options):
 
 if __name__ == '__main__':
   args = get_args()
-  settings.use_config_directory(args.configdir)
-  settings['STORAGE_RULES'] = load_storage_rules(settings)
   setup(args)
   main(args)
