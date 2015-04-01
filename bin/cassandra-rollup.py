@@ -35,7 +35,10 @@ def setup(options):
     level = logging.DEBUG
   else:
     level = logging.INFO
-  logging.basicConfig(filename=filename, level=level)
+
+  logging.basicConfig(filename=filename, level=level,
+                      format='%(asctime)s %(name)-12s %(levelname)-8s: %(message)s',
+                      datefmt='%b %d %H:%M:%S')
 
 def signal_handler(signal, frame):
   scheduler.shutdown()

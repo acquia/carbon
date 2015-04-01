@@ -1,3 +1,4 @@
+from datetime import datetime
 import logging
 import os
 import signal
@@ -17,11 +18,14 @@ class RollupHandler(object):
     self._config = None
     self._zookeeper = None
     self._tree = None
+    # This only works as long as the underlying threads don't try and change the flag
+    self._abort_rollups = False
 
     # This ensures that we leave the party cleanly if the script is told to
     # shut down
     # It's defined as a closure so that we have access to the partitioner
     def signal_handler(*args):
+      self._abort_rollups = True
       self.zookeeper.partitioner.release_set()
 
     signal.signal(signal.SIGTERM, signal_handler)
@@ -76,6 +80,8 @@ class RollupHandler(object):
 
     Once that is all done, we can proceed to divide up the token ring and rollup metrics
     """
+    start_time = datetime.now()
+    logging.info("Starting rollup process at %s", str(start_time))
     cassandra_servers = self.config.cassandra_servers
     self.read_config()
     self.zookeeper.update_hosts(self.config.zookeeper_servers)
@@ -106,6 +112,10 @@ class RollupHandler(object):
       for t in threads:
         t.join()
 
+      end_time = datetime.now()
+      logging.info("Ended rollup process at %s", str(end_time))
+      logging.info("Rollup process took %s", str(end_time - start_time))
+
   def walkRange(self, visitor, useDC, startToken, endToken):
     """Visit the data nodes in between `startToken` and `endToken` and call the
     `visitor` with the nodePath and isMetric flag.
@@ -128,6 +138,11 @@ class RollupHandler(object):
         startToken=startToken, endToken=endToken)
 
       for childPath, isMetric in pathIter:
+        # This allows the thread to abandon any subsequent work it has to do
+        # while preserving the current metric rollup operation if it is in progress
+        if self._abort_rollups:
+          lock.release()
+          return
         # we do not know what parent to tell the visitor.
         # well we could get it from the child, but I dont want to.
         visitor(None, childPath, isMetric)
