@@ -18,19 +18,8 @@ class RollupHandler(object):
     self._config = None
     self._zookeeper = None
     self._tree = None
-    # This only works as long as the underlying threads don't try and change the flag
+    # The abort_rollups() method should be the only interface into changing this flag
     self._abort_rollups = False
-
-    # This ensures that we leave the party cleanly if the script is told to
-    # shut down
-    # It's defined as a closure so that we have access to the partitioner
-    def signal_handler(*args):
-      self._abort_rollups = True
-      self.zookeeper.partitioner.release_set()
-
-    signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGHUP, signal_handler)
-    signal.signal(signal.SIGINT, signal_handler)
 
   @property
   def config(self):
@@ -68,6 +57,9 @@ class RollupHandler(object):
     if not self._tree:
       self.load_tree()
     return self._tree
+
+  def abort_rollups(self):
+    self._abort_rollups = True
 
   def rollup(self):
     """

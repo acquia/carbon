@@ -44,6 +44,8 @@ class NodeHandler(object):
   def node_found(node):
     """Called from the maintenance script to handle a leaf node.
     """
+    start_time = datetime.datetime.now()
+    logging.info("Started rolling up %s", node.nodePath)
     archives = []
     t = int(time.time())
     metadata = node.readMetadata()
@@ -65,6 +67,8 @@ class NodeHandler(object):
           NodeHandler.do_rollup(node, archive, None)
         else:
           NodeHandler.do_rollup(node, archive, archives[i+1])
+      end_time = datetime.datetime.now()
+      logging.info("Finished rolling up %s. Took %s", node.nodePath, str(end_time - start_time))
     return
 
 
