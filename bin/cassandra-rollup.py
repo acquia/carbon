@@ -7,8 +7,6 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from carbon_cassandra_plugin import carbon_cassandra_db
 from cassandra_rollup import Zookeeper, Config, RollupHandler
 
-scheduler = None
-
 def get_args():
   parser = argparse.ArgumentParser()
   parser.add_argument('--config-file', help='Path to a JSON configuration file with Zookeeper information.')
@@ -40,18 +38,26 @@ def setup(options):
                       format='%(asctime)s %(name)-12s %(levelname)-8s: %(message)s',
                       datefmt='%b %d %H:%M:%S')
 
-def signal_handler(signal, frame):
-  scheduler.shutdown()
-
 def main(options):
   handler = RollupHandler(options)
   scheduler = BlockingScheduler()
-  scheduler.add_job(handler.rollup, trigger='interval', seconds=options.interval,
-                    coalesce=True)
+
+  # Gracefully handle shutdown requests:
+  # - Prevent any new rollups from occuring, let ones in progress finish
+  # - Shutdown the scheduler
+  # - Trigger a partition rebalance by leaving the party
+  def signal_handler(*args):
+    handler.abort_rollups()
+    scheduler.shutdown()
+    if handler.zookeeper.partitioner:
+      handler.zookeeper.partitioner.release_set()
 
   signal.signal(signal.SIGTERM, signal_handler)
   signal.signal(signal.SIGHUP, signal_handler)
   signal.signal(signal.SIGINT, signal_handler)
+
+  scheduler.add_job(handler.rollup, trigger='interval', seconds=options.interval,
+                    coalesce=True)
   scheduler.start()
 
 if __name__ == '__main__':
