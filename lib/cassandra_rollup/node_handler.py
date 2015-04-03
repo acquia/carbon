@@ -62,13 +62,13 @@ class NodeHandler(object):
         'slices' : [s for s in node.slices if s.timeStep == precision]
         })
 
-      for i, archive in enumerate(archives):
-        if i == len(archives) - 1:
-          NodeHandler.do_rollup(node, archive, None)
-        else:
-          NodeHandler.do_rollup(node, archive, archives[i+1])
-      end_time = datetime.datetime.now()
-      logging.info("Finished rolling up %s. Took %s", node.nodePath, str(end_time - start_time))
+    for i, archive in enumerate(archives):
+      if i == len(archives) - 1:
+        NodeHandler.do_rollup(node, archive, None)
+      else:
+        NodeHandler.do_rollup(node, archive, archives[i+1])
+    end_time = datetime.datetime.now()
+    logging.info("Finished rolling up %s. Took %s", node.nodePath, str(end_time - start_time))
     return
 
 

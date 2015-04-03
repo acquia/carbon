@@ -1,3 +1,4 @@
+from concurrent import futures
 from datetime import datetime
 import logging
 import os
@@ -20,6 +21,7 @@ class RollupHandler(object):
     self._tree = None
     # The abort_rollups() method should be the only interface into changing this flag
     self._abort_rollups = False
+    self._thread_count = 32
 
   @property
   def config(self):
@@ -32,6 +34,14 @@ class RollupHandler(object):
     config = Config(self._options)
     config.load_config()
     self._config = config
+
+  @property
+  def thread_count(self):
+    return self._thread_count
+
+  @thread_count.setter
+  def thread_count(self, count):
+    self._thread_count = count
 
   @property
   def zookeeper(self):
@@ -51,7 +61,8 @@ class RollupHandler(object):
                                               self.config.cassandra_servers,
                                               localDCName=None,
                                               credentials=self.credentials,
-                                              read_consistency_level=ConsistencyLevel.QUORUM)
+                                              read_consistency_level=ConsistencyLevel.QUORUM,
+                                              pool_size=self._thread_count)
   @property
   def tree(self):
     if not self._tree:
@@ -96,13 +107,9 @@ class RollupHandler(object):
       threads = []
       # work on a sub set of the data nodes whose nodePath is in the the
       # token ranges owned by the cassandra nodes in rollup_targets
-      for startToken, endToken, nodeIP in self.tokenRangesForNodes(partition):
-        t = threading.Thread(target=self.walkRange, args=(visitor, False, startToken, endToken))
-        threads.append(t)
-        t.start()
-
-      for t in threads:
-        t.join()
+      with futures.ThreadPoolExecutor(max_workers=self._thread_count) as executor:
+        for startToken, endToken, nodeIP in self.tokenRangesForNodes(partition):
+          executor.submit(self.walkRange, visitor, False, startToken, endToken)
 
       end_time = datetime.now()
       logging.info("Ended rollup process at %s", str(end_time))
