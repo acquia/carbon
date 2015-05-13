@@ -89,7 +89,12 @@ class RollupHandler(object):
     self.read_config()
     self.zookeeper.update_hosts(self.config.zookeeper_servers)
 
-    self.zookeeper.partition(self.config.cassandra_servers)
+    token_ranges = []
+    # @todo: This can be simplified if we don't return nodeIP from tokenRangesForNodes
+    for (start_token, end_token, _) in self.tokenRangesForNodes(self.config.cassandra_servers):
+      token_range = ':'.join([start_token, end_token])
+      token_ranges.append(token_range)
+    self.zookeeper.partition(token_ranges)
 
     partitioner = self.zookeeper.partitioner
     if partitioner.release:
@@ -102,18 +107,18 @@ class RollupHandler(object):
       partitioner.wait_for_acquire()
 
     if partitioner.acquired:
-      partition = [p for p in self.zookeeper.partitioner]
+      logging.info("Working on token ranges: %s", ','.join([p for p in self.zookeeper.partitioner]))
+      partition = [p.split(':') for p in self.zookeeper.partitioner]
       visitor = NodePathVisitor(self.tree)
-      threads = []
-      # work on a sub set of the data nodes whose nodePath is in the the
-      # token ranges owned by the cassandra nodes in rollup_targets
-      with futures.ThreadPoolExecutor(max_workers=self._thread_count) as executor:
-        for startToken, endToken, nodeIP in self.tokenRangesForNodes(partition):
-          executor.submit(self.walkRange, visitor, False, startToken, endToken)
 
-      end_time = datetime.now()
-      logging.info("Ended rollup process at %s", str(end_time))
-      logging.info("Rollup process took %s", str(end_time - start_time))
+      # Operate only on the partitioned token ranges
+      with futures.ThreadPoolExecutor(max_workers=self._thread_count) as executor:
+        for start_token, end_token in partition:
+          executor.submit(self.walkRange, visitor, False, start_token, end_token)
+
+    end_time = datetime.now()
+    logging.info("Ended rollup process at %s", str(end_time))
+    logging.info("Rollup process took %s", str(end_time - start_time))
 
   def walkRange(self, visitor, useDC, startToken, endToken):
     """Visit the data nodes in between `startToken` and `endToken` and call the
