@@ -9,6 +9,7 @@ import logging
 import time
 
 from carbon_cassandra_plugin import carbon_cassandra_db
+from pycassa import NotFoundException
 
 def fmt_unix(timestamp):
   """Utility function to format timestamps"""
@@ -83,107 +84,113 @@ class NodeHandler(object):
     if not coarseArchive:
       return
 
-    coarseWrapper = coarseArchive if coarseArchive else \
-        collections.defaultdict(lambda: None)
-    logging.debug("Rollup called on node {path} from fine archive precision "\
-        "{fine_precision} retention {fine_retention} start {fine_start} end "\
-        "{fine_end} to coarse archive precision {coarse_precision} retention"\
-        " {coarse_retention} start {coarse_start} end {coarse_end}".format(
-            path=node.nodePath,
-            fine_precision=fineArchive["precision"],
-            fine_retention=fineArchive["retention"],
-            fine_start=fmt_unix(fineArchive["startTime"]),
-            fine_end=fmt_unix(fineArchive["endTime"]),
-            coarse_precision=coarseWrapper["precision"],
-            coarse_retention=coarseWrapper["retention"],
-            coarse_start=fmt_unix(coarseWrapper["startTime"] or 0),
-            coarse_end=fmt_unix(coarseWrapper["endTime"] or 0)
-            )
-    )
+    if logging.getLogger().getEffectiveLevel() <= logging.DEBUG:
+      coarseWrapper = coarseArchive if coarseArchive else \
+          collections.defaultdict(lambda: None)
+      logging.debug("Rollup called on node {path} from fine archive precision "\
+          "{fine_precision} retention {fine_retention} start {fine_start} end "\
+          "{fine_end} to coarse archive precision {coarse_precision} retention"\
+          " {coarse_retention} start {coarse_start} end {coarse_end}".format(
+              path=node.nodePath,
+              fine_precision=fineArchive["precision"],
+              fine_retention=fineArchive["retention"],
+              fine_start=fmt_unix(fineArchive["startTime"]),
+              fine_end=fmt_unix(fineArchive["endTime"]),
+              coarse_precision=coarseWrapper["precision"],
+              coarse_retention=coarseWrapper["retention"],
+              coarse_start=fmt_unix(coarseWrapper["startTime"] or 0),
+              coarse_end=fmt_unix(coarseWrapper["endTime"] or 0)
+              )
+      )
 
-    overflowSlices = [
-        s for s in fineArchive['slices']
-        if s.startTime < fineArchive['startTime']
-        ]
-    if not overflowSlices:
-      return
+    coarseSlices = [s for s in coarseArchive['slices']
+                    if s.startTime < coarseArchive['startTime']]
+    coarseDatapoints = []
+    # Find datapoints in the fine archive's retention period. We need to know
+    # if any datapoints have been written so we can skip the rollup if we ran
+    # one within the fine archive retention
+    if coarseSlices:
+      start_time = fineArchive['startTime'] - fineArchive['precision']
 
-    overflowDatapoints = []
-    for slice in overflowSlices:
+      # table, column family. Same thing really.
+      fine_archive_cf = node.cfCache.get("ts{}".format(fineArchive['precision']))
       try:
-        datapoints = slice.read(slice.startTime, fineArchive['startTime'])
-      except (carbon_cassandra_db.NoData) as e:
-        datapoints = []
-    overflowDatapoints.extend(list(datapoints))
-    overflowDatapoints.sort()
-    logging.debug("Got %s overflow data points for %s" % (len(overflowDatapoints),
-        node.nodePath))
+        coarseDatapoints = list(fine_archive_cf.xget(node.nodePath,
+                                                column_start=start_time,
+                                                column_finish=fineArchive['endTime'],
+                                                buffer_size=1000,
+                                                include_timestamp=True))
 
-    fineStep = fineArchive['precision']
-    coarseStep = coarseArchive['precision']
-    deletePriorTo = coarseArchive['startTime'] + (coarseStep * coarseArchive['retention'])
+      # There may not be any datapoints if this is a new metric
+      except Exception as e:
+        coarseDatapoints = []
+
+    # Go through and figure out the last written timestamp
+    # If it's within the window then we can skip this rollup
+    if coarseDatapoints:
+      _, (_, write_time) = coarseDatapoints[-1]
+
+      # CQL/Pycassa insert timestamps in microseconds. fromtimestamp() needs it in seconds
+      write_time = datetime.datetime.fromtimestamp(write_time / 1000000.0)
+      # Same problem, only we keep track of time in milliseconds in Graphite
+      window_end = datetime.datetime.fromtimestamp(fineArchive['endTime'] / 1000.0)
+      difference = window_end - write_time
+
+    if (not coarseDatapoints
+        or difference.seconds >= (fineArchive['precision'] * fineArchive['retention'])
+       ):
+
+      # We only have one slice per dataset so this is fine
+      fine_slice = fineArchive['slices'][0]
+
+      # Don't do work if the slice is newer than what we've inserted
+      if fine_slice.startTime > fineArchive['startTime']:
+        return
+
+      # Get the datapoints in the window specified by the rollup
+      # Stop the rollup process for this retention level if there aren't any datapoints
+      try:
+        datapoints = list(fine_slice.read(fineArchive['startTime'], fineArchive['endTime']))
+      except (carbon_cassandra_db.NoData):
+        logging.info("No datapoints to rollup in %s", node.nodePath)
+        return
+      except Exception as e:
+        raise e
+
+    # generator to chunk the datapoints into sets of points
+    def split_list(data, step):
+      for i in xrange(0, len(data), step):
+        yield data[i:i+step]
+
+    # We need the xff to know how much data we need in a chunk so that we can roll it up
     metadata = node.readMetadata()
     xff = metadata.get('xFilesFactor')
 
-    # We define a window corresponding to exactly one coarse datapoint
-    # Then we use it to select datapoints for aggregation
-    for i in range(coarseArchive['retention']):
-      windowStart = coarseArchive['startTime'] + (i * coarseStep)
-      windowEnd = windowStart + coarseStep
+    # Split the datapoints into chunks to be rolled up
+    # Each chunk consists of the set of datapoints that will be aggregated into a single datapoint
+    # The number of datapoints is a fraction of the coarse archive:
+    # ex.
+    #   given 2 retention periods with precision of 10 seconds and 60 seconds
+    #   This partitions the list in to groups of 6 (60 seconds / 10 seconds)
+    chunked_data = list(split_list(datapoints, coarseArchive['precision'] / fineArchive['precision']))
 
-      fineDatapoints = [
-        d for d in overflowDatapoints
-        if d[0] >= windowStart and d[0] < windowEnd
-      ]
-      logging.debug("There are %s fine archive data points in the window %s to %s "\
-          "for coarse archive retention %s" % (len(fineDatapoints),
-              fmt_unix(windowStart), fmt_unix(windowEnd), i))
-      if not fineDatapoints:
-        continue
+    rollup_values = []
+    window_end = fineArchive['precision'] * fineArchive['retention']
+    for i, val in enumerate(range(0, window_end, coarseArchive['precision'])):
+      # Get the timestamp with the step
+      rollup_timestamp = fineArchive['startTime'] + val
+      points = chunked_data[i]
 
-      knownValues = [
-          value
-          for (timestamp,value) in fineDatapoints
-          if value is not None
-          ]
-      if not knownValues:
-        logging.debug("None of the fine archive data points were known, skipping.")
-        continue
+      known_values = [value for (_, value) in points if value is not None]
+      # Only rollup if we have enough data to make it worthwhile (the xff)
+      if float(len(known_values)) / len(points) >= xff:
+        value = aggregate(node, points)
+        rollup_point = (rollup_timestamp, value)
+        rollup_values.append(rollup_point)
 
-      knownPercent = float(len(knownValues)) / len(fineDatapoints)
-      if knownPercent < xff:  # we don't have enough data to aggregate!
-        logging.debug("Percent of known fine data points %s less then "\
-            "xFilesFactor %s, skipping." % (knownPercent, xff))
-        continue
-
-      coarseValue = aggregate(node, fineDatapoints)
-      coarseDatapoint = (windowStart, coarseValue)
-      logging.debug("Coarse data point retention %s has timestamp %s and "\
-          "value %s" % (i, coarseDatapoint[0], coarseDatapoint[1]))
-      fineValues = [d[1] for d in fineDatapoints]
-
-      written = False
-      # we only have one slice for all archives, but lets leave this here
-      for slice in coarseArchive['slices']:
-        if slice.startTime <= windowStart and slice.endTime >= windowStart:
-          slice.write([coarseDatapoint])
-          logging.debug("Wrote data point to existing coarse archive slice")
-          written = True
-          break
-
-      # Old comment, think we will never need this code...
-      # We could pre-pend to an adjacent slice starting after windowStart
-      # but that would be much more expensive in terms of I/O operations.
-      # In the common case, append-only is best.
-      if not written:
-        newSlice = carbon_cassandra_db.DataSlice.create(node, windowStart,
-            coarseStep)
-        newSlice.write([coarseDatapoint])
-        coarseArchive['slices'].append(newSlice)
-        deletePriorTo = min(deletePriorTo, windowStart)
-
-    # Previously we would delete the overflow slices from the fine
-    # archive at this point. We rely on cassandra TTL to remove them.
+    # Batch write the new values to Cassandra
+    if rollup_values:
+      coarseArchive['slices'][0].write(rollup_values)
     return
 
 class NodePathVisitor(object):
