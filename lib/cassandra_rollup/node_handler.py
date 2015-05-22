@@ -129,33 +129,35 @@ class NodeHandler(object):
     # If it's within the window then we can skip this rollup
     if coarseDatapoints:
       _, (_, write_time) = coarseDatapoints[-1]
-
       # CQL/Pycassa insert timestamps in microseconds. fromtimestamp() needs it in seconds
       write_time = datetime.datetime.fromtimestamp(write_time / 1000000.0)
       # Same problem, only we keep track of time in milliseconds in Graphite
       window_end = datetime.datetime.fromtimestamp(fineArchive['endTime'] / 1000.0)
       difference = window_end - write_time
 
-    if (not coarseDatapoints
+    datapoints = []
+    if (
+        not coarseDatapoints
         or difference.seconds >= (fineArchive['precision'] * fineArchive['retention'])
-       ):
+        ):
 
-      # We only have one slice per dataset so this is fine
-      fine_slice = fineArchive['slices'][0]
-
-      # Don't do work if the slice is newer than what we've inserted
-      if fine_slice.startTime > fineArchive['startTime']:
+      # Don't try rolling up if we don't have any data in the slice
+      try:
+        fine_slice = fineArchive['slices'][0]
+        if fine_slice.startTime > fineArchive['startTime']:
+          return
+      except IndexError:
         return
 
       # Get the datapoints in the window specified by the rollup
       # Stop the rollup process for this retention level if there aren't any datapoints
       try:
         datapoints = list(fine_slice.read(fineArchive['startTime'], fineArchive['endTime']))
+        if not datapoints:
+          return
       except (carbon_cassandra_db.NoData):
         logging.info("No datapoints to rollup in %s", node.nodePath)
         return
-      except Exception as e:
-        raise e
 
     # generator to chunk the datapoints into sets of points
     def split_list(data, step):
@@ -172,14 +174,22 @@ class NodeHandler(object):
     # ex.
     #   given 2 retention periods with precision of 10 seconds and 60 seconds
     #   This partitions the list in to groups of 6 (60 seconds / 10 seconds)
-    chunked_data = list(split_list(datapoints, coarseArchive['precision'] / fineArchive['precision']))
+    try:
+      chunked_data = list(split_list(datapoints, coarseArchive['precision'] / fineArchive['precision']))
+    except Exception as e:
+      logging.error(e)
+      raise e
 
     rollup_values = []
     window_end = fineArchive['precision'] * fineArchive['retention']
     for i, val in enumerate(range(0, window_end, coarseArchive['precision'])):
       # Get the timestamp with the step
       rollup_timestamp = fineArchive['startTime'] + val
-      points = chunked_data[i]
+      # Continue rolling up until we run out of datapoints
+      try:
+        points = chunked_data[i]
+      except IndexError:
+        break
 
       known_values = [value for (_, value) in points if value is not None]
       # Only rollup if we have enough data to make it worthwhile (the xff)
