@@ -200,7 +200,15 @@ class NodeHandler(object):
 
     # Batch write the new values to Cassandra
     if rollup_values:
-      coarseArchive['slices'][0].write(rollup_values)
+      try:
+        coarseArchive['slices'][0].write(rollup_values)
+      except IndexError:
+        # Insert a new slice if we don't already have one
+        # The start time is set to the beginning of the rollup window since the
+        # slice is created at the very end of the process
+        newSlice = carbon_cassandra_db.DataSlice.create(node, fineArchive['startTime'], coarseArchive['precision'])
+        coarseArchive['slices'].append(newSlice)
+        newSlice.write(rollup_values)
     return
 
 class NodePathVisitor(object):
